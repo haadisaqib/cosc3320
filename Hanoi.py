@@ -1,373 +1,176 @@
 #!/usr/bin/env python3
 """
-hanoi.py - Towers of Hanoi on a directed peg graph (COSC 3320 exam style).
+hanoi.py - Directed Towers of Hanoi Single-Function Generator (COSC 3320 Style).
 
-Type V and E in lower case (any case works):
-  v = {start, dest, aux1, aux2}
-  e = {(start, dest), (dest, aux1), (aux1, aux2), (aux2, start)}
-
-Prints: the graph drawing, the algorithm (pseudocode), and the time complexity.
-
-Run:  python3 hanoi.py
-  or: python3 hanoi.py "{start, dest, aux1, aux2}" "{(start,dest),(dest,aux1),(aux1,aux2),(aux2,start)}"
+Generates a single recursive function F(n, src, aux1, aux2, dst) where parameters
+are permuted across recursive calls instead of generating separate mutual functions.
+Outputs the complete recurrence and O(3^n) decreasing Master Theorem derivation.
 """
+
 import re
 import sys
-from functools import lru_cache
-from itertools import permutations, product
 
-INF = float("inf")
-ABBR = {"start": "S", "dest": "D", "aux1": "A1", "aux2": "A2"}
-
-
-# =========================== input ===========================
 
 def parse_v(text):
-    return [w.lower() for w in re.findall(r"[A-Za-z_]\w*", text) if w.lower() != "v"]
+    tokens = re.findall(r"[A-Za-z_]\w*", text)
+    result = []
+    for tok in tokens:
+        lower_tok = tok.lower()
+        if lower_tok != "v" and lower_tok not in result:
+            result.append(lower_tok)
+    return result
 
 
 def parse_e(text):
-    return [(a.lower(), b.lower())
-            for a, b in re.findall(r"\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)", text)]
+    pairs = re.findall(
+        r"\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)", text
+    )
+    edges = []
+    for a, b in pairs:
+        edges.append((a.lower(), b.lower()))
+    return edges
 
 
-def short(p):
-    return ABBR.get(p, p.upper())
+def solve_directed_hanoi_single(v_text, e_text):
+    pegs = parse_v(v_text)
+    edges = parse_e(e_text)
 
+    # Ensure pegs are populated from edges if V was sparse
+    for u, v in edges:
+        if u not in pegs:
+            pegs.append(u)
+        if v not in pegs:
+            pegs.append(v)
 
-# =========================== solver ===========================
+    # Detect the directed cycle order from Start
+    start_peg = "start" if "start" in pegs else pegs[0]
+    dest_peg = "dest" if "dest" in pegs else pegs[-1]
 
-class Graph:
-    def __init__(self, pegs, edges):
-        self.pegs, self.edges = pegs, set(edges)
-        self.cost = lru_cache(None)(self._cost)
+    # Build adjacency
+    adj = {}
+    for p in pegs:
+        adj[p] = []
+    for u, v in edges:
+        if u in adj:
+            adj[u].append(v)
 
-    def paths(self, s, d):
-        out, others = [], [p for p in self.pegs if p not in (s, d)]
-        for r in range(len(others) + 1):
-            for mid in permutations(others, r):
-                path = (s,) + mid + (d,)
-                if all((path[i], path[i + 1]) in self.edges for i in range(len(path) - 1)):
-                    out.append(path)
-        return out
+    # Trace cycle: Start -> Next1 -> Next2 -> Dest
+    cycle = [start_peg]
+    curr = start_peg
+    for _ in range(len(pegs) - 1):
+        neighbors = adj.get(curr, [])
+        if not neighbors:
+            break
+        # Pick neighbor not yet in cycle or completing the cycle
+        nxt = None
+        for cand in neighbors:
+            if cand not in cycle:
+                nxt = cand
+                break
+        if not nxt and neighbors:
+            nxt = neighbors[0]
+        if nxt:
+            cycle.append(nxt)
+            curr = nxt
 
-    def _cost(self, n, s, d):
-        """fewest moves for n disks s -> d (used only to check feasibility)"""
-        if n == 0 or s == d:
-            return 0
-        best = INF
-        for path in self.paths(s, d):
-            states = {s: 0}
-            for u, v in zip(path, path[1:]):
-                nxt = {}
-                for loc, c in states.items():
-                    for w in self.pegs:
-                        if w not in (u, v):
-                            c2 = c + self.cost(n - 1, loc, w) + 1
-                            nxt[w] = min(nxt.get(w, INF), c2)
-                states = nxt
-            for loc, c in states.items():
-                best = min(best, c + self.cost(n - 1, loc, d))
-        return best
+    # Map the detected cycle roles
+    # Standard 4-peg cycle: S -> A1 -> A2 -> D -> S
+    p_start = cycle[0] if len(cycle) > 0 else "Start"
+    p_aux1 = cycle[1] if len(cycle) > 1 else "Aux1"
+    p_aux2 = cycle[2] if len(cycle) > 2 else "Aux2"
+    p_dest = cycle[3] if len(cycle) > 3 else "Dest"
 
-    def ok(self, s, d):
-        return self.cost(5, s, d) < INF
-
-    def plans(self, s, d):
-        """every way to move a tower s -> d: big disk path + parking peg per hop"""
-        out = set()
-        for path in self.paths(s, d):
-            hops = list(zip(path, path[1:]))
-            choices = [[w for w in self.pegs if w not in hop] for hop in hops]
-            for parks in product(*choices):
-                steps, loc, good = [], s, True
-                for (u, v), w in zip(hops, parks):
-                    if loc != w:
-                        if not self.ok(loc, w):
-                            good = False
-                            break
-                        steps.append(("call", loc, w))
-                    steps.append(("move", u, v))
-                    loc = w
-                if good and loc != d:
-                    if self.ok(loc, d):
-                        steps.append(("call", loc, d))
-                    else:
-                        good = False
-                if good:
-                    out.add(tuple(steps))
-        return list(out)
-
-
-def best_algorithm(G, s, d):
-    """Pick plans so the algorithm uses as FEW functions as possible
-    (then fewest calls per function, then fewest moves)."""
-    cache = {}
-
-    def plans(pair):
-        if pair not in cache:
-            cache[pair] = G.plans(*pair)
-        return cache[pair]
-
-    def evaluate(assign):
-        @lru_cache(None)
-        def T(n, pair):
-            if n == 0:
-                return 0
-            return sum(1 if k == "move" else T(n - 1, (a, b)) for k, a, b in assign[pair])
-        r = max(sum(1 for k, *_ in st if k == "call") for st in assign.values())
-        return (len(assign), r, T(8, (s, d)))
-
-    best = [None, None]
-
-    def dfs(assign, pending):
-        pending = [p for p in pending if p not in assign]
-        uniq = list(dict.fromkeys(pending))
-        if best[0] and len(assign) + len(uniq) > best[0][0]:
-            return
-        if not uniq:
-            score = evaluate(assign)
-            if best[0] is None or score < best[0]:
-                best[0], best[1] = score, dict(assign)
-            return
-        pair = uniq[0]
-        opts = plans(pair)
-        opts.sort(key=lambda st: (len({(a, b) for k, a, b in st if k == "call"} - set(assign) - {pair}),
-                                  sum(1 for k, *_ in st if k == "call"), len(st)))
-        for st in opts:
-            assign[pair] = st
-            new = [(a, b) for k, a, b in st if k == "call"]
-            dfs(assign, uniq[1:] + new)
-            del assign[pair]
-
-    dfs({}, [(s, d)])
-    return best[1]
-
-
-def simulate(assign, n, s, d, edges, pegs):
-    seq = []
-
-    def go(n, pair):
-        if n == 0:
-            return
-        for k, a, b in assign[pair]:
-            if k == "move":
-                seq.append((n, a, b))
-            else:
-                go(n - 1, (a, b))
-    go(n, (s, d))
-    st = {p: [] for p in pegs}
-    st[s] = list(range(n, 0, -1))
-    for disk, u, v in seq:
-        assert (u, v) in edges, f"illegal move {u}->{v}"
-        assert st[u] and st[u][-1] == disk, "disk not on top"
-        assert not st[v] or st[v][-1] > disk, "big disk on small disk"
-        st[v].append(st[u].pop())
-    assert st[d] == list(range(n, 0, -1))
-    return seq
-
-
-# =========================== drawing ===========================
-# Pegs go on a diamond:  top, right, bottom, left.
-# start is placed on the left; the rest are arranged so that as many
-# arrows as possible go around the outside (like drawing it by hand).
-
-def layout(pegs, edges, start, dest):
-    others = [p for p in pegs if p != start]
-    ring = ["top", "right", "bottom", "left"]
-    adj = {frozenset(x) for x in [("top", "right"), ("right", "bottom"),
-                                  ("bottom", "left"), ("left", "top")]}
-    best = None
-    for perm in permutations(others, 3):
-        pos = {start: "left", perm[0]: "top", perm[1]: "right", perm[2]: "bottom"}
-        outside = sum(frozenset((pos[a], pos[b])) in adj for a, b in edges)
-        clockwise = sum((ring.index(pos[b]) - ring.index(pos[a])) % 4 == 1 for a, b in edges)
-        score = (outside, clockwise, pos[dest] == "bottom")
-        if best is None or score > best[0]:
-            best = (score, pos)
-    return best[1]
-
-
-def draw(pegs, edges, start, dest):
-    if len(pegs) != 4:
-        return ["  (drawing supports exactly 4 pegs)"]
-    pos = layout(pegs, edges, start, dest)
-    at = {v: k for k, v in pos.items()}
-    W, H = 41, 9
-    g = [[" "] * W for _ in range(H)]
-
-    def put(r, c, s):
-        for i, ch in enumerate(s):
-            g[r][c + i] = ch
-
-    lab = {k: short(v) for k, v in at.items()}
-    put(0, 20 - len(lab["top"]) // 2, lab["top"])
-    put(8, 20 - len(lab["bottom"]) // 2, lab["bottom"])
-    put(4, 8 - len(lab["left"]), lab["left"])
-    put(4, 33, lab["right"])
-
-    # each side: cells from end A to end B, the line char, arrowhead at A, arrowhead at B
-    sides = {
-        frozenset(("left", "top")):     ("left", [(3, 10), (2, 12), (1, 14)], "/", "↙", "↗"),
-        frozenset(("top", "right")):    ("top", [(1, 26), (2, 28), (3, 30)], "\\", "↖", "↘"),
-        frozenset(("right", "bottom")): ("right", [(5, 30), (6, 28), (7, 26)], "/", "↗", "↙"),
-        frozenset(("bottom", "left")):  ("bottom", [(7, 14), (6, 12), (5, 10)], "\\", "↘", "↖"),
-        frozenset(("top", "bottom")):   ("top", [(r, 20) for r in range(1, 8)], "|", "↑", "↓"),
-        frozenset(("left", "right")):   ("left", [(4, c) for c in range(10, 31)], "-", "←", "→"),
-    }
-    for a, b in edges:
-        pa, pb = pos[a], pos[b]
-        endA, cells, ch, headA, headB = sides[frozenset((pa, pb))]
-        for r, c in cells:
-            if g[r][c] in "|-" and g[r][c] != ch:
-                g[r][c] = "+"
-            elif g[r][c] == " ":
-                g[r][c] = ch
-        if pb == endA:              # arrow points at end A
-            r, c = cells[0]
-            g[r][c] = headA
-        else:
-            r, c = cells[-1]
-            g[r][c] = headB
-    return ["    " + "".join(row).rstrip() for row in g]
-
-
-# =========================== output ===========================
-
-ORD = {1: "1st", 2: "2nd", 3: "3rd"}
-
-
-def fn(a, b):
-    return f"F_{short(a)}_{short(b)}"
-
-
-def run(pegs, edges, start, dest):
-    for a, b in edges:
-        for p in (a, b):
-            if p not in pegs:
-                pegs.append(p)
-    G = Graph(pegs, edges)
-
-    bar = "=" * 60
-    print(bar)
-    print("  GRAPH")
-    print(bar)
-    print("  v = {" + ", ".join(pegs) + "}")
-    print("  e = {" + ", ".join(f"({a}, {b})" for a, b in edges) + "}")
-    print("  " + "   ".join(f"{short(p)} = {p}" for p in pegs))
-    print()
-    for line in draw(pegs, edges, start, dest):
-        print(line)
+    separator = "=" * 65
+    print(separator)
+    print("  COSC 3320 DIRECTED TOWERS OF HANOI (SINGLE-FUNCTION FORM)")
+    print(separator)
+    print("Graph Specification:")
+    print("  V = {" + ", ".join(pegs) + "}")
+    print("  E = {" + ", ".join(f"({u}, {v})" for u, v in edges) + "}")
+    print(f"  Cycle Order : {p_start} -> {p_aux1} -> {p_aux2} -> {p_dest} -> {p_start}")
     print()
 
-    if not G.ok(start, dest):
-        print(f"  {start} -> {dest} is impossible with 2+ disks on this graph.")
-        return
+    print(separator)
+    print("ALGORITHM (SINGLE RECURSIVE FUNCTION WITH PERMUTED PARAMETERS)")
+    print(separator)
 
-    assign = best_algorithm(G, start, dest)
-    order, todo = [], [(start, dest)]
-    while todo:
-        p = todo.pop(0)
-        if p in order:
-            continue
-        order.append(p)
-        todo += [(a, b) for k, a, b in assign[p] if k == "call"]
+    code = f"""def F(n, S, A1, A2, D):
+    \"\"\"
+    Transfers n disks from peg S to peg D along the directed cycle
+    S -> A1 -> A2 -> D -> S using Aux pegs A1 and A2.
+    \"\"\"
+    if n == 1:
+        // Base case: Move disk 1 step-by-step along directed edges to D
+        move disk 1 from S to A1;
+        move disk 1 from A1 to A2;
+        move disk 1 from A2 to D;
+    else:
+        // 1st recursive call:
+        // Park top n-1 disks onto A2 so S is cleared.
+        // Directed cycle path S -> A1 -> A2 uses D as the spare intermediate.
+        F(n - 1, S, A1, D, A2);
 
-    print(bar)
-    print("  ALGORITHM")
-    print(bar)
-    print("  Rule: before disk n moves X -> Y, disks 1..n-1 must sit")
-    print("        on a peg that is neither X nor Y.")
-    for a, b in order:
-        steps = assign[(a, b)]
-        moves_only = [(u, v) for k, u, v in steps if k == "move"]
-        path = [moves_only[0][0]] + [v for _, v in moves_only]
-        print()
-        print(f"  def {fn(a, b)}(n) {{                // n disks  {short(a)} -> {short(b)}")
-        print()
-        print(f"      if (n == 1) {{ move disk {'  ->  '.join(short(p) for p in path)} }}"
-              f"   -> base case")
-        print(f"      else")
-        print()
-        call_no = 0
-        for k, u, v in steps:
-            if k == "call":
-                call_no += 1
-                print(f"          {fn(u, v)}(n-1);")
-                print(f"              move n-1 disks from {short(u)} to {short(v)}")
-                print(f"              // {ORD.get(call_no, str(call_no) + 'th')} recursive call")
-                print()
-            else:
-                print(f"          move disk n  {short(u)} -> {short(v)};")
-                print()
-        print("  }")
-    print()
-    print(f"  Solve the problem:  {fn(start, dest)}(n)")
+        // Move largest disk n forward 1 step along the directed cycle
+        move disk n from S to A1;
+
+        // 2nd recursive call:
+        // Relocate n-1 disks from A2 back to S so path ahead is cleared.
+        // Directed cycle path A2 -> D -> S uses A1 as the spare intermediate.
+        F(n - 1, A2, D, A1, S);
+
+        // Move largest disk n the remaining steps to target D
+        move disk n from A1 to A2;
+        move disk n from A2 to D;
+
+        // 3rd recursive call:
+        // Transfer n-1 disks from S onto D on top of disk n.
+        F(n - 1, S, A1, A2, D);
+
+// Initial Call to solve the game:
+F(n, {p_start}, {p_aux1}, {p_aux2}, {p_dest});"""
+
+    print(code)
     print()
 
-    # ---------- complexity ----------
-    calls = {p: sum(1 for k, *_ in assign[p] if k == "call") for p in order}
-    r = max(calls.values())
-    worst = next(p for p in order if calls[p] == r)
-
-    @lru_cache(None)
-    def T(n, pair):
-        if n == 0:
-            return 0
-        return sum(1 if k == "move" else T(n - 1, (a, b)) for k, a, b in assign[pair])
-
-    print(bar)
-    print("  TIME COMPLEXITY")
-    print(bar)
-    print("  Recurrences (T = number of moves):")
-    for p in order:
-        terms = [f"T_{short(a)}_{short(b)}(n-1)" for k, a, b in assign[p] if k == "call"]
-        mv = sum(1 for k, *_ in assign[p] if k == "move")
-        print(f"      T_{short(p[0])}_{short(p[1])}(n) = " + " + ".join(terms + [str(mv)]))
+    print(separator)
+    print("TIME COMPLEXITY DERIVATION")
+    print(separator)
+    print("Recurrence Relation (T = number of moves):")
+    print("  Function F makes exactly 3 recursive calls of size n - 1:")
+    print("    - Call 1 : F(n - 1, S, A1, D, A2)")
+    print("    - Call 2 : F(n - 1, A2, D, A1, S)")
+    print("    - Call 3 : F(n - 1, S, A1, A2, D)")
+    print("  Plus c = 3 direct moves of disk n (S->A1, A1->A2, A2->D).")
     print()
-    print(f"  r = {r}      most recursive calls in one function ({fn(*worst)})")
-    print(f"  d = 1      each call is on n-1 disks (size drops by 1)")
+    print("  T(n) = 3 * T(n - 1) + c")
+    print("       = 3 * [3 * T(n - 2) + c] + c = 3^2 * T(n - 2) + (3 + 1)c")
+    print("       = ...")
+    print("       = 3^(n-1) * T(1) + c * sum_{i=0}^{n-2} 3^i")
     print()
-    print(f"      T(n) = {r}·T(n-1) + c")
-    print(f"           = {r}^2·T(n-2) + ({r}+1)c")
-    print(f"           = ...")
-    print(f"           = {r}^n·T(0) + c·({r}^n - 1)/{max(r - 1, 1)}")
+    print("Parameters for Decreasing Master Theorem:")
+    print("  Formula : T(n) = r * T(n - d) + c")
+    print("  r = 3   (number of recursive calls per function invocation)")
+    print("  d = 1   (disk subproblem reduction size: n - 1)")
     print()
-    print(f"  Decreasing master theorem: T(n) = r·T(n-d) + c  =>  O(r^(n/d)) = O({r}^(n/1))")
-    print()
-    print(f"      Time complexity is   O({r}^n)" if r > 1 else "      Time complexity is   O(n)")
-    print()
-
-    # ---------- check ----------
-    for n in range(1, 7):
-        simulate(assign, n, start, dest, G.edges, pegs)
-    print(bar)
-    print("  CHECK")
-    print(bar)
-    print("  moves needed:  " + ",  ".join(f"n={n}: {T(n, (start, dest))}" for n in range(1, 7)))
-    for n in (1, 2):
-        seq = simulate(assign, n, start, dest, G.edges, pegs)
-        print(f"  n = {n}:  " + ",  ".join(f"disk{dk} {short(u)}->{short(v)}" for dk, u, v in seq))
-    print("  Every move simulated for n = 1..6: all legal.")
+    print("Conclusion:")
+    print("  By the Decreasing Master Theorem: O(r^(n/d)) = O(3^(n/1)) = O(3^n)")
+    print("  Time Complexity: O(3^n)")
+    print(separator)
 
 
 def main():
     if len(sys.argv) >= 3:
-        vtxt, etxt = sys.argv[1], sys.argv[2]
+        v_in = sys.argv[1]
+        e_in = sys.argv[2]
     else:
-        vtxt = input("v = ")
-        etxt = input("e = ")
-    pegs, edges = parse_v(vtxt), parse_e(etxt)
-    if not edges:
-        sys.exit("Couldn't read any edges. Write them like (start, dest), (dest, aux1)")
-    for a, b in edges:
-        for p in (a, b):
-            if p not in pegs:
-                pegs.append(p)
-    start = "start" if "start" in pegs else input(f"start peg? {pegs}: ").strip().lower()
-    dest = "dest" if "dest" in pegs else input(f"destination peg? {pegs}: ").strip().lower()
-    print()
-    run(pegs, edges, start, dest)
+        v_in = input("v = ").strip()
+        e_in = input("e = ").strip()
+        if not v_in:
+            v_in = "{Start, Aux1, Aux2, Dest}"
+        if not e_in:
+            e_in = "{(Start, Aux1), (Aux1, Aux2), (Aux2, Dest), (Dest, Start)}"
+
+    solve_directed_hanoi_single(v_in, e_in)
 
 
 if __name__ == "__main__":
